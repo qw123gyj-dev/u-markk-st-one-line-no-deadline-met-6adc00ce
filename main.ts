@@ -43,6 +43,11 @@
  *        - the twist must land inside the last six words, or the line
  *          loses its criterion-3 score — a punchline buried mid-line
  *          is a punchline the audience never hears;
+ *        - a triple escalation earns a point of its own: two setup
+ *          clauses that both go right, then the turn subverting them
+ *          (the build passed, the tests passed, and the feature never
+ *          showed up) is the rule of three, a joke mechanism, not a
+ *          plain list of reasons — and the scorer credits it as one;
  *        - ties break criterion by criterion in the brief's order,
  *          then by shorter length, then by candidate order.
  *   4. It writes the winner to entry.txt, reads the file back, and
@@ -276,7 +281,7 @@ const STOCK_GAGS: string[] = [
 /**
  * Concrete work details that make an excuse specific instead of
  * generic: calendar, sprint, standup, deploy, pull request, backlog,
- * build, tests. A line naming two or more reads as a real week at a
+ * build, tests, feature. A line naming two or more reads as a real week at a
  * real job, not a joke Mad-Libbed onto the word "deadline".
  */
 const WORK_DETAILS: string[] = [
@@ -288,6 +293,7 @@ const WORK_DETAILS: string[] = [
   "backlog",
   "build",
   "tests",
+  "feature",
   "laptop",
   "keystroke",
   "to-do list",
@@ -335,18 +341,34 @@ interface Breakdown {
 }
 
 /**
- * Strongest surprise turn in the line, by the TURN_PHRASES table.
- * Returns 0 when the line has no turn at all: it reports a delay
- * without ever becoming a joke.
+ * The strongest surprise turn in the line, as its table entry, or null
+ * when the line has no turn at all: it reports a delay without ever
+ * becoming a joke. The entry (not just the strength) is returned so
+ * callers can also tell WHERE the turn sits in the line — a turn
+ * preceded by setup clauses is an escalation, not a one-off gag.
  */
-function turnStrengthOf(text: string): number {
-  let best = 0;
+function strongestTurnOf(text: string): {
+  phrase: string;
+  strength: number;
+} | null {
+  let best: { phrase: string; strength: number } | null = null;
   for (const turn of TURN_PHRASES) {
-    if (contains(text, turn.phrase) && turn.strength > best) {
-      best = turn.strength;
+    if (
+      contains(text, turn.phrase) &&
+      (best === null || turn.strength > best.strength)
+    ) {
+      best = turn;
     }
   }
   return best;
+}
+
+/**
+ * Strongest surprise turn in the line, by the TURN_PHRASES table.
+ * Returns 0 when the line has no turn at all.
+ */
+function turnStrengthOf(text: string): number {
+  return strongestTurnOf(text)?.strength ?? 0;
 }
 
 /**
@@ -376,6 +398,13 @@ function scoreExcuse(text: string): number {
  * and is capped outright (see scoreCandidate). A plain list of reasons
  * — alarm, traffic, Mercury — has no turn, however many reasons it
  * stacks: three flat reasons do not add up to one joke.
+ *
+ * But a triple escalation is not a plain list: two setup clauses that
+ * both go right, then the turn subverting them (the build passed, the
+ * tests passed, and the feature never showed up), is the rule of three
+ * — a joke mechanism in its own right, not three reasons in a row.
+ * A turn preceded by at least two comma-separated setup clauses earns
+ * a point for it. A two-beat line (setup, then turn) earns none.
  */
 function scoreFunny(text: string, turnStrength: number): number {
   if (turnStrength === 0) return 0;
@@ -389,6 +418,18 @@ function scoreFunny(text: string, turnStrength: number): number {
       tail.includes(turn.phrase.split(" ").slice(-3).join(" ")),
   );
   if (!turnInTail) score -= 1;
+  // Triple escalation: the strongest turn is preceded by at least two
+  // comma-separated setup clauses, so the third beat subverts the
+  // first two instead of merely following them.
+  const turn = strongestTurnOf(text);
+  if (turn !== null) {
+    const beforeTurn = text.slice(
+      0,
+      text.toLowerCase().indexOf(turn.phrase),
+    );
+    const setupCommas = (beforeTurn.match(/,/g) ?? []).length;
+    if (setupCommas >= 2) score += 1;
+  }
   return Math.max(0, Math.min(5, score));
 }
 
@@ -637,12 +678,14 @@ function main(): void {
   console.log(`Line: ${winner.candidate.text}`);
   console.log(
     `Why it wins: ${winner.candidate.note} ` +
-      `It names the miss and the cause (criterion 1), turns on a laptop ` +
-      `that is still waiting for work that only ever happened in the ` +
-      `author's head (criterion 2), lands that turn in its final words ` +
-      `(criterion 3), reads like a confession at standup (criterion 4), ` +
-      `and is built from a specific week — standup, a laptop, a first ` +
-      `keystroke — not a stock excuse (criterion 5).`,
+      `It names the miss and the cause (criterion 1), turns on a surprise ` +
+      `that lands in its final words (criteria 2-3), reads like a confession ` +
+      `from someone cornered (criterion 4), and is built from a specific ` +
+      `week at work rather than a stock excuse (criterion 5). ` +
+      `Breakdown [excuse funny form spoken fresh]: ` +
+      `[${winner.breakdown.excuse} ${winner.breakdown.funny} ` +
+      `${winner.breakdown.form} ${winner.breakdown.spoken} ` +
+      `${winner.breakdown.fresh}] — see the table above.`,
   );
 
   // Write the winner, then read it back and verify every gate.
